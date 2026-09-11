@@ -2,22 +2,25 @@ const { spawnSync } = require('child_process');
 
 // ---------- State ----------
 let duration = 0;
-let pausedElapsed = 0;    // seconds accumulated before current play segment
-let startTimestamp = 0;   // timestamp when current play segment began
+let pausedElapsed = 0;
+let startTimestamp = 0;
 let timer = null;
 let onUpdateCallback = null;
 
 const isMac = process.platform === 'darwin';
 
 // ---------- Duration lookup ----------
-// Uses macOS `afinfo` to read song duration. Returns 0 if unavailable.
+// Uses macOS `afinfo`. Returns 0 if file has no sound / is corrupt.
 function getDuration(songPath) {
   if (!isMac) return 0;
 
   try {
     const result = spawnSync('afinfo', [songPath]);
 
-    if (!result.stdout) return 0;
+    // Guard: spawn failed, non-zero exit, or empty output
+    if (result.error || result.status !== 0 || !result.stdout) {
+      return 0;
+    }
 
     const output = result.stdout.toString();
     const match = output.match(/estimated duration:\s*([\d.]+)\s*sec/);
@@ -33,26 +36,22 @@ function getDuration(songPath) {
 
 // ---------- Time formatting ----------
 function formatTime(seconds) {
-  if (!Number.isFinite(seconds) || seconds < 0) {
-    seconds = 0;
-  }
-
+  if (!Number.isFinite(seconds) || seconds < 0) seconds = 0;
   seconds = Math.floor(seconds);
 
-  const minutes = Math.floor(seconds / 60);
-  const secs = seconds % 60;
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
 
-  return `${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
-// ---------- Elapsed calculation ----------
-// Real-time based so the bar doesn't drift over long songs.
+// ---------- Elapsed ----------
 function currentElapsed() {
   if (startTimestamp === 0) return pausedElapsed;
   return pausedElapsed + Math.floor((Date.now() - startTimestamp) / 1000);
 }
 
-// ---------- Progress bar string ----------
+// ---------- Bar string ----------
 function createProgressBar() {
   const barLength = 30;
   const elapsed = currentElapsed();
@@ -96,7 +95,6 @@ function startProgress(songPath, onUpdate) {
   startTimestamp = Date.now();
 
   emit();
-
   timer = setInterval(emit, 1000);
 }
 
@@ -105,7 +103,6 @@ function pauseProgress() {
     clearInterval(timer);
     timer = null;
   }
-
   if (startTimestamp !== 0) {
     pausedElapsed = currentElapsed();
     startTimestamp = 0;
@@ -116,12 +113,10 @@ function resumeProgress(onUpdate) {
   if (typeof onUpdate === 'function') {
     onUpdateCallback = onUpdate;
   }
-
   if (timer || startTimestamp !== 0) return;
 
   startTimestamp = Date.now();
   emit();
-
   timer = setInterval(emit, 1000);
 }
 
@@ -130,13 +125,14 @@ function stopProgress() {
     clearInterval(timer);
     timer = null;
   }
-
   duration = 0;
   pausedElapsed = 0;
   startTimestamp = 0;
 }
 
+// ---------- Exports ----------
 module.exports = {
+  getDuration,       // ← used by player.js to filter silent files
   getProgress,
   startProgress,
   pauseProgress,

@@ -20,9 +20,9 @@ let currentProgress = {
 };
 
 // ---------- Load songs ----------
-let songFiles;
+let allFiles;
 try {
-  songFiles = fs
+  allFiles = fs
     .readdirSync(SONGS_DIR)
     .filter(file => file.toLowerCase().endsWith('.mp3'));
 } catch (err) {
@@ -31,8 +31,30 @@ try {
   process.exit(1);
 }
 
-if (songFiles.length === 0) {
+if (allFiles.length === 0) {
   console.log('❌ No MP3 files found inside the songs folder.');
+  process.exit(0);
+}
+
+// Scan each file and tag it as playable or silent
+const songs = allFiles.map(file => {
+  const songPath = `${SONGS_DIR}/${file}`;
+  const duration = progressBar.getDuration(songPath);
+
+  return {
+    file,
+    songName: file.replace(/\.mp3$/i, ''),
+    path: songPath,
+    duration,
+    valid: duration > 0
+  };
+});
+
+const playableCount = songs.filter(s => s.valid).length;
+const silentCount = songs.length - playableCount;
+
+if (playableCount === 0) {
+  console.log('❌ All MP3 files in ./songs have no sound / are invalid.');
   process.exit(0);
 }
 
@@ -41,14 +63,17 @@ function clearConsole() {
   process.stdout.write('\x1Bc');
 }
 
-function getSongName(file) {
-  return file.replace(/\.mp3$/i, '');
-}
-
 function updateProgress(progress) {
   currentProgress = progress;
   if (!currentPlayer) return;
   renderPlayer();
+}
+
+function showMessage(msg) {
+  clearConsole();
+  console.log(`\n${msg}\n`);
+  console.log('Returning to menu...');
+  setTimeout(renderMenu, 1200);
 }
 
 // ---------- Stop / Exit ----------
@@ -58,9 +83,7 @@ function killCurrentPlayer() {
   const player = currentPlayer;
 
   try {
-    if (isPaused) {
-      process.kill(player.pid, 'SIGCONT');
-    }
+    if (isPaused) process.kill(player.pid, 'SIGCONT');
     process.kill(player.pid, 'SIGTERM');
   } catch (err) {
     // already gone — ignore
@@ -93,15 +116,20 @@ function exitPlayer() {
 }
 
 // ---------- Play ----------
-function playSong(songPath, songName) {
+function playSelected(song) {
+  if (!song.valid) {
+    showMessage(`🔇 "${song.songName}" has no sound available.`);
+    return;
+  }
+
   killCurrentPlayer();
 
-  currentSong = songName;
+  currentSong = song.songName;
   isPaused = false;
 
-  progressBar.startProgress(songPath, updateProgress);
+  progressBar.startProgress(song.path, updateProgress);
 
-  const player = spawn('afplay', [songPath]);
+  const player = spawn('afplay', [song.path]);
   currentPlayer = player;
 
   renderPlayer();
@@ -125,9 +153,7 @@ function playSong(songPath, songName) {
     currentPlayer = null;
     isPaused = false;
 
-    if (code === 0) {
-      console.log('\n\n✅ Song finished.');
-    }
+    if (code === 0) console.log('\n\n✅ Song finished.');
 
     setTimeout(renderMenu, 1000);
   });
@@ -212,19 +238,26 @@ function renderMenu() {
   console.log('Use ↑ ↓ to select a song');
   console.log('Press ENTER to play\n');
 
-  songFiles.forEach((file, index) => {
-    const songName = getSongName(file);
+  songs.forEach((song, index) => {
+    const isSelected = index === selectedIndex;
+    const tag = song.valid ? '' : '  🔇 (no sound)';
+    const label = `    ${index + 1}. ${song.songName}${tag}`;
 
-    if (index === selectedIndex) {
-      process.stdout.write(
-        `\x1b[7m  ❯ ${index + 1}. ${songName}  \x1b[0m\n`
-      );
+    if (isSelected) {
+      process.stdout.write(`\x1b[7m  ❯ ${index + 1}. ${song.songName}${tag}  \x1b[0m\n`);
+    } else if (!song.valid) {
+      // Dim invalid songs
+      process.stdout.write(`\x1b[2m${label}\x1b[0m\n`);
     } else {
-      console.log(`    ${index + 1}. ${songName}`);
+      console.log(label);
     }
   });
 
   console.log('\n===================================');
+  if (silentCount > 0) {
+    console.log(`🔇 ${silentCount} file(s) have no sound and cannot be played.`);
+    console.log('===================================');
+  }
   console.log('🎮 Controls:');
   console.log('↑ ↓ → Select song');
   console.log('ENTER → Play selected song');
@@ -237,31 +270,23 @@ function renderMenu() {
 
 // ---------- Input handling ----------
 function handleKeyPress(str, key) {
-  if (key.ctrl && key.name === 'c') {
-    exitPlayer();
-    return;
-  }
-
-  if (key.name === 'escape') {
-    exitPlayer();
-    return;
-  }
+  if (key.ctrl && key.name === 'c') { exitPlayer(); return; }
+  if (key.name === 'escape') { exitPlayer(); return; }
 
   if (key.name === 'up') {
-    selectedIndex = (selectedIndex - 1 + songFiles.length) % songFiles.length;
+    selectedIndex = (selectedIndex - 1 + songs.length) % songs.length;
     renderMenu();
     return;
   }
 
   if (key.name === 'down') {
-    selectedIndex = (selectedIndex + 1) % songFiles.length;
+    selectedIndex = (selectedIndex + 1) % songs.length;
     renderMenu();
     return;
   }
 
   if (key.name === 'return' || key.name === 'enter') {
-    const selectedSong = songFiles[selectedIndex];
-    playSong(`${SONGS_DIR}/${selectedSong}`, getSongName(selectedSong));
+    playSelected(songs[selectedIndex]);
     return;
   }
 
@@ -271,10 +296,9 @@ function handleKeyPress(str, key) {
   if (input === 's') { stopSong(); return; }
 
   const num = Number(str);
-  if (Number.isInteger(num) && num >= 1 && num <= songFiles.length) {
+  if (Number.isInteger(num) && num >= 1 && num <= songs.length) {
     selectedIndex = num - 1;
-    const selectedSong = songFiles[selectedIndex];
-    playSong(`${SONGS_DIR}/${selectedSong}`, getSongName(selectedSong));
+    playSelected(songs[selectedIndex]);
   }
 }
 
