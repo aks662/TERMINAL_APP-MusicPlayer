@@ -2,6 +2,12 @@
 
 A simple terminal-based music player for macOS that plays MP3 files from a local `songs` folder. Navigate your playlist using arrow keys, play songs, pause/resume, stop, and exit—all from the command line.
 
+### 🎵 Song Selection Menu
+![Song Selection](./screenshots/selection.png)
+
+### ⏯️ Now Playing with Progress Bar
+![Now Playing](./screenshots/progress.png)
+
 ## Features
 
 - Lists all `.mp3` files from the `songs` directory.
